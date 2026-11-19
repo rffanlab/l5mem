@@ -1,0 +1,44 @@
+# 同义词组：每行一组，写法之间用 / 分开。检索任何一个写法，组里的写法一起查。
+# 大小写不用分开写（检索本来不分大小写）。部署时自动载入；重复载入安全（同一组会合并）。
+# 只放「确实是同一个东西」的写法：公司和它的股票代码可以放一组，公司和它的产品不要放一组。
+# 太短、容易撞别的词的写法别放（MU、Fed、Arm 这种）：同义扩展出来的西文写法按整词匹配，但用户直接敲的词是前缀匹配。
+英伟达 / NVIDIA / NVDA / 辉达
+黄仁勋 / Jensen Huang / 老黄
+超威 / AMD / 超威半导体
+英特尔 / Intel / INTC
+台积电 / TSMC / 台湾积体电路
+三星 / Samsung / 三星电子
+SK海力士 / SK Hynix / 海力士
+美光 / Micron / 美光科技
+博通 / Broadcom / AVGO
+高通 / Qualcomm / QCOM
+阿斯麦 / ASML
+安谋 / Arm Holdings
+微软 / Microsoft / MSFT
+谷歌 / Google / Alphabet / GOOGL
+亚马逊 / Amazon / AMZN
+苹果公司 / Apple / AAPL
+Meta / 脸书 / Facebook / Meta Platforms
+甲骨文 / Oracle / ORCL
+特斯拉 / Tesla / TSLA
+马斯克 / Elon Musk / Musk
+奥特曼 / Sam Altman / Altman
+软银 / SoftBank / 软银集团
+孙正义 / Masayoshi Son
+阿里巴巴 / 阿里 / Alibaba / BABA
+腾讯 / Tencent
+字节跳动 / 字节 / ByteDance
+百度 / Baidu
+华为 / Huawei
+小米 / Xiaomi
+深度求索 / DeepSeek
+月之暗面 / Moonshot AI / Kimi
+智谱 / Zhipu / 智谱AI
+通义千问 / 千问 / Qwen
+豆包 / Doubao
+稀宇科技 / MiniMax
+谷歌 DeepMind / DeepMind
+美国商务部 / Department of Commerce / 商务部
+美国工业和安全局 / BIS / Bureau of Industry and Security
+美联储 / Federal Reserve
+国际货币基金组织 / IMF / International Monetary Fund

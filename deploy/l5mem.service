@@ -1,0 +1,32 @@
+[Unit]
+Description=L5 memory store (team long-term memory: socket + HTTP API)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=l5mem
+Group=l5mem
+WorkingDirectory=/srv/e5-data/l5mem
+Environment=L5_DATA=/srv/e5-data/l5mem
+Environment=L5_SOCKET=/run/l5mem/l5.sock
+Environment=L5_HTTP=127.0.0.1:19110
+EnvironmentFile=-/etc/e5-runtime/l5mem.env
+EnvironmentFile=-/etc/e5-runtime/global.env
+ExecStart=/srv/e5-apps/l5mem/current/l5 serve
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=20s
+RuntimeDirectory=l5mem
+RuntimeDirectoryMode=0750
+UMask=0007
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/srv/e5-data/l5mem /srv/e5-logs/l5mem
+StandardOutput=append:/srv/e5-logs/l5mem/l5mem.log
+StandardError=append:/srv/e5-logs/l5mem/l5mem.log
+
+[Install]
+WantedBy=multi-user.target

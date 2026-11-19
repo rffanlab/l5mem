@@ -1,0 +1,12 @@
+{
+  "id": "l5mem",
+  "name": "L5 记忆库",
+  "description": "团队共用的长期事实库（第五层记忆）：四路检索 + 生命周期核对 + 使用日报；InfoCollector 等业务写入与回查",
+  "services": ["l5mem.service"],
+  "url": "http://192.168.1.158:9110",
+  "port": 9110,
+  "gpu": "CPU",
+  "accent": "violet",
+  "warning": "停止后机器人和 InfoCollector 查不到长期记忆（写入会失败并稍后重试）。数据在 /srv/e5-data/l5mem/l5.db，不会丢。",
+  "health_url": "http://127.0.0.1:19110/healthz"
+}

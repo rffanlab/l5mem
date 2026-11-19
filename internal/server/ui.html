@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>L5 记忆库</title>
+<style>
+:root{--paper:#f6f7f4;--surface:#fff;--ink:#1d2733;--ink2:#3c4752;--muted:#6c7680;--rule:#e0e3dd;--accent:#2b6a6e;--tint:#e7f0ef;
+--seal:#b23a26;--sealt:#fbece8;--amber:#8f5e0f;--ambert:#faf1df;
+--serif:"Noto Serif SC","Source Han Serif SC","Songti SC","SimSun",serif;--sans:-apple-system,"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif;
+--mono:ui-monospace,"SFMono-Regular",Consolas,monospace}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+button,input,select{font:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+header{background:var(--surface);border-bottom:1px solid var(--rule);padding:14px 28px;display:flex;align-items:center;gap:28px;position:sticky;top:0;z-index:3}
+header h1{margin:0;font:700 19px var(--serif);letter-spacing:1px}
+header h1 small{font:400 12px var(--sans);color:var(--muted);margin-left:8px;letter-spacing:0}
+nav{display:flex;gap:4px}
+nav button{border:0;background:none;padding:6px 12px;border-radius:4px;color:var(--ink2);cursor:pointer}
+nav button[aria-selected=true]{background:var(--tint);color:var(--accent);font-weight:600}
+main{max-width:1180px;margin:0 auto;padding:28px}
+.bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:22px}
+.bar input[type=search]{flex:1;min-width:260px;padding:10px 14px;border:1px solid var(--rule);border-radius:6px;background:var(--surface);font-size:16px}
+.bar select{padding:9px 10px;border:1px solid var(--rule);border-radius:6px;background:var(--surface)}
+.bar label{color:var(--ink2);font-size:13px;display:flex;align-items:center;gap:4px}
+.meta{color:var(--muted);font-size:12.5px;margin:-10px 0 16px}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:32px;align-items:start}
+@media(max-width:960px){.grid{grid-template-columns:1fr}main{padding:18px 16px}header{padding:12px 16px;flex-wrap:wrap;gap:10px}}
+.list{display:flex;flex-direction:column}
+.row{display:flex;gap:14px;padding:14px 0;border-top:1px solid var(--rule);cursor:pointer}
+.row:first-child{border-top:0}
+.row:hover .body{color:var(--ink)}
+.row.sel{background:linear-gradient(90deg,var(--tint),transparent 70%);margin:0 -12px;padding:14px 12px;border-radius:4px}
+.kind{flex:none;width:38px;height:38px;border:1.5px solid var(--rule);border-radius:3px;display:flex;align-items:center;justify-content:center;font:700 13px var(--serif);color:var(--muted);background:var(--surface)}
+.kind.principle,.kind.decision{border-color:var(--seal);color:var(--seal);background:var(--sealt)}
+.kind.judgment,.kind.lesson{border-color:var(--accent);color:var(--accent)}
+.topic{font-weight:600;font-size:14px}
+.body{font:15px/1.8 var(--serif);color:var(--ink2);margin-top:2px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.foot{margin-top:6px;display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:12px;color:var(--muted)}
+.tag{display:inline-block;padding:0 8px;border-radius:10px;background:#eef0ec;color:var(--ink2);font-size:12px;line-height:20px}
+.tag.a{background:var(--tint);color:var(--accent)}.tag.w{background:var(--ambert);color:var(--amber)}.tag.b{background:var(--sealt);color:var(--seal)}
+.score{font:12px var(--mono);color:var(--muted)}
+.ex{font:11.5px/1.6 var(--mono);color:var(--muted);margin-top:4px}
+aside{position:sticky;top:76px;background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:20px 22px;max-height:calc(100vh - 100px);overflow:auto}
+aside h2{margin:0 0 6px;font:700 18px/1.5 var(--serif)}
+aside .full{font:15.5px/1.9 var(--serif);white-space:pre-wrap;margin:10px 0 16px}
+aside h3{font:600 13px var(--sans);color:var(--ink2);margin:18px 0 8px}
+dl{display:grid;grid-template-columns:76px 1fr;gap:4px 10px;margin:0;font-size:13px}
+dt{color:var(--muted)}dd{margin:0;word-break:break-all}
+.chain{list-style:none;margin:0;padding:0;border-left:1px solid var(--rule)}
+.chain li{padding:0 0 10px 14px;position:relative;font-size:13px}
+.chain li:before{content:"";position:absolute;left:-4px;top:7px;width:7px;height:7px;border-radius:50%;border:1.5px solid var(--accent);background:var(--surface)}
+.chain li.cur:before{background:var(--accent)}
+.chain li.old{color:var(--muted);text-decoration:line-through;text-decoration-color:#c9cdc6}
+.empty{color:var(--muted);padding:30px 0}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--rule)}
+th{color:var(--muted);font-weight:600}
+td.n{font-variant-numeric:tabular-nums;text-align:right}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin-bottom:26px}
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:6px;padding:14px 16px}
+.card b{display:block;font:700 26px var(--serif);font-variant-numeric:tabular-nums}
+.card span{color:var(--muted);font-size:12.5px}
+.verdict{padding:10px 14px;border-radius:4px;background:var(--tint);margin:0 0 8px;font-size:13.5px}
+.tagcloud a{display:inline-block;margin:0 6px 8px 0;text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>L5 记忆库<small>团队共用的长期事实库</small></h1>
+  <nav role="tablist">
+    <button role="tab" data-tab="search" aria-selected="true">检索</button>
+    <button role="tab" data-tab="due">待核对</button>
+    <button role="tab" data-tab="tags">标签</button>
+    <button role="tab" data-tab="stats">运行状态</button>
+  </nav>
+</header>
+<main>
+  <section id="tab-search">
+    <form class="bar" id="f">
+      <input type="search" id="q" placeholder="搜主题、正文或标签，例如：订阅、作息、配图" autofocus>
+      <select id="kind"><option value="">全部类型</option><option value="principle">原则</option><option value="decision">决策</option>
+        <option value="judgment">判断</option><option value="lesson">教训</option><option value="fact">事实</option><option value="memo">备忘</option></select>
+      <label><input type="checkbox" id="hist">含已取代</label>
+      <label><input type="checkbox" id="explain">显示打分</label>
+    </form>
+    <div class="meta" id="meta"></div>
+    <div class="grid">
+      <div class="list" id="list"></div>
+      <aside id="detail"><p class="empty" style="padding:0;margin:0">点一条记忆，在这里看全文、出处、取代链和相关记忆。</p></aside>
+    </div>
+  </section>
+  <section id="tab-due" hidden><div class="list" id="due"></div></section>
+  <section id="tab-tags" hidden><div class="tagcloud" id="tags"></div></section>
+  <section id="tab-stats" hidden><div id="stats"></div></section>
+</main>
+<script>
+const KL={principle:"原则",decision:"决策",judgment:"判断",lesson:"教训",fact:"事实",memo:"备忘"};
+const VL={stable:"长期",slow:"缓变",volatile:"快变"};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+async function api(op,params){const u=new URL("api/v1/"+op,location.href);for(const[k,v]of Object.entries(params||{}))if(v!==""&&v!==false&&v!=null)u.searchParams.set(k,v);u.searchParams.set("caller","web");
+  const r=await fetch(u);const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j}
+function foot(e){const t=[];t.push(`<span class="tag ${e.volatility==="volatile"?"w":e.volatility==="stable"?"a":""}">${VL[e.volatility]||e.volatility}</span>`);
+  if(!e.active)t.push(`<span class="tag b">${e.superseded_by?"已被 #"+e.superseded_by+" 取代":"已撤回"}</span>`);
+  if(e.stale)t.push(`<span class="tag w">该核对了${e.overdue_days?"（逾期 "+e.overdue_days+" 天）":""}</span>`);
+  if(!e.verified)t.push(`<span class="tag w">未核实</span>`);
+  (e.tags||[]).forEach(g=>t.push(`<span class="tag">${esc(g)}</span>`));
+  t.push(`<span>#${e.id}</span><span>${esc(e.created_at.slice(0,10))}</span>`);if(e.source)t.push(`<span>${esc(e.source.slice(0,40))}</span>`);return t.join("")}
+function rowHTML(e,extra){return `<div class="row" data-id="${e.id}"><div class="kind ${e.kind}">${KL[e.kind]||e.kind}</div><div style="min-width:0">
+  <div class="topic">${esc(e.topic||"（无主题）")}</div><div class="body">${esc(e.body)}</div><div class="foot">${foot(e)}${extra||""}</div></div></div>`}
+let timer;
+async function search(){const q=$("#q").value.trim();try{const r=await api("search",{q,kind:$("#kind").value,history:$("#hist").checked?1:"",explain:$("#explain").checked?1:"",limit:30});
+  $("#meta").textContent=`${r.hits.length} 条${r.candidates>r.hits.length?"（候选 "+r.candidates+"）":""}，${r.ms} ms${r.cached?"（缓存）":""}${r.routes&&r.routes.length?"，检索路："+r.routes.join(" / "):""}${r.hub_tags&&r.hub_tags.length?"，太泛已放弃的标签："+r.hub_tags.join("、"):""}${r.expanded&&r.expanded.length?"，同义写法一起查了："+r.expanded.join("、"):""}${r.folded?"，"+r.folded+" 条近似重复挪到了后面":""}`;
+  $("#list").innerHTML=r.hits.length?r.hits.map(h=>rowHTML(h,`<span class="score">${h.score.toFixed(3)}</span>`+(h.explain?`<div class="ex" style="flex-basis:100%">相关 ${h.explain.lex} · 邻近 ${h.explain.proximity} · 新鲜 ${h.explain.recency} · 重要 ${h.explain.importance}${h.explain.tag_boost?" · 标签 +"+h.explain.tag_boost:""} · 命中路 ${Object.entries(h.explain.routes||{}).map(([k,v])=>k+"#"+v).join(" ")}</div>`:""))).join(""):`<p class="empty">${q?"没有找到。换个说法，或者用更短的词试试。":"还没有记忆。"}</p>`}
+  catch(e){$("#list").innerHTML=`<p class="empty">检索失败：${esc(e.message)}</p>`}}
+async function show(id){document.querySelectorAll(".row").forEach(r=>r.classList.toggle("sel",+r.dataset.id===id));
+  const [e,h,rel]=await Promise.all([api("get",{id}),api("history",{id}),api("relate",{id,limit:6}).catch(()=>({entries:[]}))]);
+  const chain=(h.entries||[]).length>1?`<h3>取代链</h3><ul class="chain">${h.entries.map(x=>`<li class="${x.id===id?"cur":""} ${x.active?"":"old"}"><a href="#" data-go="${x.id}">#${x.id}</a> ${esc(x.created_at.slice(0,10))} ${esc(x.body.slice(0,60))}</li>`).join("")}</ul>`:"";
+  const related=(rel.entries||[]).length?`<h3>相关记忆 <span style="font-weight:400;color:var(--muted)">按共享的稀有标签</span></h3>${rel.entries.map(x=>`<div style="margin:0 0 8px;font-size:13px"><a href="#" data-go="${x.id}">${esc(x.topic||"#"+x.id)}</a> <span style="color:var(--muted)">${x.hop===2?"经由 #"+x.via+"，":""}共享：${esc(x.shared.join("、"))}</span></div>`).join("")}`:"";
+  $("#detail").innerHTML=`<h2>${esc(e.topic||"#"+e.id)}</h2><div class="foot">${foot(e)}</div><div class="full">${esc(e.body)}</div>
+  <dl><dt>类型</dt><dd>${KL[e.kind]||e.kind}</dd><dt>写入者</dt><dd>${esc(e.caller||"-")}</dd><dt>出处</dt><dd>${/^https?:/.test(e.source)?`<a href="${esc(e.source)}" target="_blank" rel="noopener">${esc(e.source)}</a>`:esc(e.source||"-")}</dd>
+  <dt>生命周期</dt><dd>${VL[e.volatility]}${e.recheck_epoch?"，"+new Date(e.recheck_epoch*1000).toLocaleDateString("zh-CN")+" 前要核对":"，不用核对"}</dd>
+  <dt>上次核对</dt><dd>${e.last_verified_at?esc(e.last_verified_at+" "+(e.last_verified_by||"")+" "+(e.last_verified_note||"")):"-"}</dd><dt>被用过</dt><dd>${e.use_count} 次</dd></dl>${chain}${related}`}
+document.addEventListener("click",ev=>{const g=ev.target.closest("[data-go]");if(g){ev.preventDefault();show(+g.dataset.go);return}
+  const r=ev.target.closest(".row");if(r&&r.closest("#list"))show(+r.dataset.id);
+  const t=ev.target.closest("[data-tag]");if(t){ev.preventDefault();$("#q").value=t.dataset.tag;tab("search");search()}});
+$("#f").addEventListener("submit",e=>{e.preventDefault();search()});
+$("#q").addEventListener("input",()=>{clearTimeout(timer);timer=setTimeout(search,180)});
+["#kind","#hist","#explain"].forEach(s=>$(s).addEventListener("change",search));
+function tab(name){document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===name));
+  document.querySelectorAll("main>section").forEach(s=>s.hidden=s.id!=="tab-"+name);
+  if(name==="due")loadDue();if(name==="tags")loadTags();if(name==="stats")loadStats()}
+document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>tab(b.dataset.tab)));
+async function loadDue(){const r=await api("due",{days:7,limit:200});$("#due").innerHTML=r.entries&&r.entries.length?r.entries.map(e=>rowHTML(e)).join(""):`<p class="empty">7 天内没有要核对的记忆。</p>`}
+async function loadTags(){const r=await api("tags",{limit:300});const max=Math.max(1,...(r.tags||[]).map(t=>t.count));
+  $("#tags").innerHTML=(r.tags||[]).map(t=>`<a href="#" data-tag="${esc(t.tag)}" class="tag ${t.count/max>0.5?"a":""}" style="font-size:${12+Math.round(6*Math.sqrt(t.count/max))}px">${esc(t.tag)} <span style="color:var(--muted)">${t.count}</span></a>`).join("")||`<p class="empty">还没有标签。</p>`}
+async function loadStats(){const[s,m]=await Promise.all([api("stats"),api("metrics",{since_hours:72}).catch(()=>null)]);
+  const card=(n,l)=>`<div class="card"><b>${n}</b><span>${l}</span></div>`;
+  let h=`<div class="cards">${card(s.active,"有效记忆")}${card(s.superseded,"已被取代")}${card(s.tags,"标签")}${card(s.due,"该核对了")}${card(s.overdue_7d,"逾期 7 天以上")}${card((s.db_bytes/1048576).toFixed(1)+" MB","库文件")}</div>`;
+  if(m){h+=(m.verdicts||[]).map(v=>`<div class="verdict">${esc(v)}</div>`).join("");
+    h+=`<div class="cards">${card(m.searches,"近 72 小时检索")}${card(Math.round(m.tag_top1_ratio*100)+"%","标签命中率")}${card(m.tag_route_p50_ms+" / "+m.non_tag_p50_ms,"标签路 / 非标签路 p50 ms")}${card(m.relates,"联想次数")}${card(m.empty_searches,"空手而归")}</div>`;
+    const rows=[];for(const[c,cmds]of Object.entries(m.callers||{}))for(const[cmd,n]of Object.entries(cmds))rows.push(`<tr><td>${esc(c)}</td><td>${esc(cmd)}</td><td class="n">${n}</td><td class="n">${(m.latency_ms[cmd]||[0,0]).join(" / ")}</td></tr>`);
+    h+=rows.length?`<table><tr><th>谁在用</th><th>命令</th><th style="text-align:right">次数</th><th style="text-align:right">p50 / p95 ms</th></tr>${rows.join("")}</table>`:`<p class="empty">近 72 小时没有使用记录。</p>`}
+  $("#stats").innerHTML=h}
+search();
+{const id=+new URLSearchParams(location.search).get("id");if(id)show(id).catch(()=>{});}
+</script>
+</body>
+</html>

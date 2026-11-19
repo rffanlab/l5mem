@@ -1,0 +1,6 @@
+/data/
+/bin/
+deploy-158.log
+*.db
+*.db-wal
+*.db-shm
