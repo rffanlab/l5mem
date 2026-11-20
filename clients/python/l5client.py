@@ -84,15 +84,17 @@ class L5:
     # ---- 写 ----
     def add(self, topic: str, body: str, kind: str = "fact", tags=None, source: str = "", volatility: str = "",
             unverified: bool = False, supersedes=None, meta: dict | None = None, created_at: str = "",
-            recheck_days: int = 0) -> dict:
+            recheck_days: int = 0, cites=None) -> dict:
         """返回 {"id", "existed", "volatility", "superseded"}；内容相同重复写入返回 existed=True。
         created_at（"YYYY-MM-DD HH:MM:SS"，本地时间）：补录旧资料时用资料本来的时间。
-        recheck_days：自定多少天后到期核对（例如「60 天内见分晓」的假设填 60）。"""
+        recheck_days：自定多少天后到期核对（例如「60 天内见分晓」的假设填 60）。
+        cites：这条是拿哪几条旧记忆推出来的（id 列表）；被引用的记忆算「被想起」，进 mind()。"""
         return self.call("add", body={"topic": topic, "body": body, "kind": kind, "tags": list(tags or []), "source": source,
                                       "volatility": volatility, "unverified": unverified,
                                       "supersedes": [int(x) for x in (supersedes or [])], "meta": meta or {},
                                       "caller": self.caller, **({"created_at": created_at} if created_at else {}),
-                                      **({"recheck_days": int(recheck_days)} if recheck_days else {})})
+                                      **({"recheck_days": int(recheck_days)} if recheck_days else {}),
+                                      **({"cites": [int(x) for x in cites]} if cites else {})})
 
     def supersede(self, old: int, new: int) -> dict:
         return self.call("supersede", body={"old": int(old), "new": int(new)})
@@ -132,6 +134,17 @@ class L5:
 
     def relate(self, id: int, limit: int = 8) -> list:
         return self.call("relate", {"id": int(id), "limit": limit}).get("entries") or []
+
+    def mind(self, limit: int = 12) -> dict:
+        """心头在想什么：{"tags": [{"tag", "activation", "trend"(new/up/flat/down), "uses_7d", "uses_prev_28d",
+        "docs", "explore", "recent": [{"id", "kind", "topic"}]}], "background": [太泛的大词], "entries"}。
+        最后约两成名额是「探索」：不在最前面、但最近升得最快的标签。"""
+        return self.call("mind", {"limit": limit})
+
+    def links(self, days: int = 7, min: int = 2, prior: int = 0, limit: int = 10) -> list:
+        """新冒出来的连接：最近 days 天一起出现至少 min 次、以前最多一起出现过 prior 次的两个标签。
+        [{"a", "b", "count", "prior", "pmi", "score", "entries": [{"id", "kind", "topic"}]}]，按 count×PMI 排。"""
+        return self.call("links", {"days": days, "min": min, "prior": prior, "limit": limit}).get("links") or []
 
     def due(self, days: int = 0, limit: int = 100) -> list:
         return self.call("due", {"days": days, "limit": limit}).get("entries") or []

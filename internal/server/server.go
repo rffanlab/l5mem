@@ -122,6 +122,8 @@ type req struct {
 	By          string   `json:"by"`
 	Note        string   `json:"note"`
 	Days        int      `json:"days"`
+	Min         int      `json:"min"`   // links：最近至少一起出现几次
+	Prior       int      `json:"prior"` // links：以前最多一起出现过几次（0 = 从没有过）
 	SinceLast   bool     `json:"since_last"`
 	SinceHours  float64  `json:"since_hours"`
 	Path        string   `json:"path"`
@@ -193,6 +195,12 @@ func parseReq(r *http.Request, op string) (*req, error) {
 	}
 	if x, err := strconv.Atoi(v.Get("days")); err == nil {
 		q.Days = x
+	}
+	if x, err := strconv.Atoi(v.Get("min")); err == nil {
+		q.Min = x
+	}
+	if x, err := strconv.Atoi(v.Get("prior")); err == nil {
+		q.Prior = x
 	}
 	if x, err := strconv.ParseFloat(v.Get("since_hours"), 64); err == nil {
 		q.SinceHours = x
@@ -350,6 +358,10 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, op string, q *
 		list, hubs, err := st.Relate(q.ID, q.Limit)
 		ev.ID, ev.Hits = q.ID, len(list)
 		return map[string]any{"entries": list, "hub_tags": hubs}, 0, err
+	case "mind":
+		return wrap(st.Mind(q.Limit))
+	case "links":
+		return wrap(st.Links(q.Days, q.Min, q.Prior, q.Limit))
 	case "tags":
 		list, err := st.Tags(q.Limit)
 		return map[string]any{"tags": list}, 0, err
@@ -412,6 +424,8 @@ type WatchReport struct {
 	Doctor      *store.DoctorReport      `json:"doctor"`
 	Backup      string                   `json:"backup,omitempty"`     // 今天的备份文件
 	BackupErr   string                   `json:"backup_err,omitempty"` // 备份失败原因
+	Mind        []store.MindTag          `json:"mind,omitempty"`       // 心头前几个（只是附带，不影响是否通知）
+	NewLinks    []store.Link             `json:"new_links,omitempty"`
 }
 
 // backup 每日把全库导出成 backups/l5-YYYY-MM-DD.jsonl.gz（含同义词组），只留最近 Keep 份。
@@ -464,6 +478,12 @@ func (s *Server) Watch() (*WatchReport, error) {
 		if rep.BackupErr != "" {
 			log.Printf("每日备份失败：%s", rep.BackupErr)
 		}
+	}
+	if m, err := s.st.Mind(8); err == nil {
+		rep.Mind = m.Tags
+	}
+	if l, err := s.st.Links(7, 2, 0, 5); err == nil {
+		rep.NewLinks = l.Links
 	}
 	rep.Silent = len(c.Overdue7) == 0 && (rep.Metrics == nil || (rep.Metrics.Empty && len(rep.Metrics.Verdicts) == 0)) &&
 		(rep.Doctor == nil || rep.Doctor.OK) && rep.BackupErr == ""

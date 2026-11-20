@@ -174,7 +174,7 @@ func (s *Store) Doctor() (*DoctorReport, error) {
 	if r.BrokenLinks > 0 {
 		r.Problems = append(r.Problems, fmt.Sprintf("%d 条取代关系指向不存在的条目", r.BrokenLinks))
 	}
-	for _, t := range []string{"fts_bi", "fts_tri"} {
+	for _, t := range []string{"fts_bi", "fts_tri", "fts_imp"} {
 		if _, err := s.db.Exec(`INSERT INTO ` + t + `(` + t + `) VALUES('integrity-check')`); err != nil {
 			r.Problems = append(r.Problems, t+" 完整性检查失败："+err.Error())
 		}
@@ -195,32 +195,32 @@ func (s *Store) Repair() (int, error) {
 		return 0, err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM fts_bi`, `DELETE FROM fts_tri`, `DELETE FROM entry_tags`} {
+	for _, q := range []string{`DELETE FROM fts_bi`, `DELETE FROM fts_tri`, `DELETE FROM fts_imp`, `DELETE FROM entry_tags`} {
 		if _, err := tx.Exec(q); err != nil {
 			return 0, err
 		}
 	}
-	rows, err := tx.Query(`SELECT id, topic, body, tags FROM entries`)
+	rows, err := tx.Query(`SELECT id, kind, topic, body, tags FROM entries`)
 	if err != nil {
 		return 0, err
 	}
 	type row struct {
-		id               int64
-		topic, body, tag string
+		id                     int64
+		kind, topic, body, tag string
 	}
 	var all []row
 	for rows.Next() {
 		var r row
-		rows.Scan(&r.id, &r.topic, &r.body, &r.tag)
+		rows.Scan(&r.id, &r.kind, &r.topic, &r.body, &r.tag)
 		all = append(all, r)
 	}
 	rows.Close()
 	for _, r := range all {
-		if err := indexEntry(tx, r.id, r.topic, r.body, splitTags(r.tag)); err != nil {
+		if err := indexEntry(tx, r.id, r.kind, r.topic, r.body, splitTags(r.tag)); err != nil {
 			return 0, err
 		}
 	}
-	for _, t := range []string{"fts_bi", "fts_tri"} {
+	for _, t := range []string{"fts_bi", "fts_tri", "fts_imp"} {
 		tx.Exec(`INSERT INTO ` + t + `(` + t + `) VALUES('optimize')`)
 	}
 	if err := tx.Commit(); err != nil {
@@ -469,7 +469,7 @@ func (s *Store) Import(r io.Reader) (*ImportReport, error) {
 		}
 		id, _ := res.LastInsertId()
 		x.ID = id
-		if err := indexEntry(tx, id, x.Topic, x.Body, splitTags(tags)); err != nil {
+		if err := indexEntry(tx, id, kind, x.Topic, x.Body, splitTags(tags)); err != nil {
 			tx.Rollback()
 			s.wmu.Unlock()
 			return nil, err

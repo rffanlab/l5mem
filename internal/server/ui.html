@@ -73,6 +73,7 @@ td.n{font-variant-numeric:tabular-nums;text-align:right}
   <nav role="tablist">
     <button role="tab" data-tab="search" aria-selected="true">检索</button>
     <button role="tab" data-tab="due">待核对</button>
+    <button role="tab" data-tab="mind">心头</button>
     <button role="tab" data-tab="tags">标签</button>
     <button role="tab" data-tab="stats">运行状态</button>
   </nav>
@@ -93,6 +94,7 @@ td.n{font-variant-numeric:tabular-nums;text-align:right}
     </div>
   </section>
   <section id="tab-due" hidden><div class="list" id="due"></div></section>
+  <section id="tab-mind" hidden><div id="mind"></div></section>
   <section id="tab-tags" hidden><div class="tagcloud" id="tags"></div></section>
   <section id="tab-stats" hidden><div id="stats"></div></section>
 </main>
@@ -124,7 +126,7 @@ async function show(id){document.querySelectorAll(".row").forEach(r=>r.classList
   <dl><dt>类型</dt><dd>${KL[e.kind]||e.kind}</dd><dt>写入者</dt><dd>${esc(e.caller||"-")}</dd><dt>出处</dt><dd>${/^https?:/.test(e.source)?`<a href="${esc(e.source)}" target="_blank" rel="noopener">${esc(e.source)}</a>`:esc(e.source||"-")}</dd>
   <dt>生命周期</dt><dd>${VL[e.volatility]}${e.recheck_epoch?"，"+new Date(e.recheck_epoch*1000).toLocaleDateString("zh-CN")+" 前要核对":"，不用核对"}</dd>
   <dt>上次核对</dt><dd>${e.last_verified_at?esc(e.last_verified_at+" "+(e.last_verified_by||"")+" "+(e.last_verified_note||"")):"-"}</dd><dt>被用过</dt><dd>${e.use_count} 次</dd></dl>${chain}${related}`}
-document.addEventListener("click",ev=>{const g=ev.target.closest("[data-go]");if(g){ev.preventDefault();show(+g.dataset.go);return}
+document.addEventListener("click",ev=>{const g=ev.target.closest("[data-go]");if(g){ev.preventDefault();tab("search");show(+g.dataset.go);return}
   const r=ev.target.closest(".row");if(r&&r.closest("#list"))show(+r.dataset.id);
   const t=ev.target.closest("[data-tag]");if(t){ev.preventDefault();$("#q").value=t.dataset.tag;tab("search");search()}});
 $("#f").addEventListener("submit",e=>{e.preventDefault();search()});
@@ -132,11 +134,19 @@ $("#q").addEventListener("input",()=>{clearTimeout(timer);timer=setTimeout(searc
 ["#kind","#hist","#explain"].forEach(s=>$(s).addEventListener("change",search));
 function tab(name){document.querySelectorAll("nav button").forEach(b=>b.setAttribute("aria-selected",b.dataset.tab===name));
   document.querySelectorAll("main>section").forEach(s=>s.hidden=s.id!=="tab-"+name);
-  if(name==="due")loadDue();if(name==="tags")loadTags();if(name==="stats")loadStats()}
+  if(name==="due")loadDue();if(name==="tags")loadTags();if(name==="mind")loadMind();if(name==="stats")loadStats()}
 document.querySelectorAll("nav button").forEach(b=>b.addEventListener("click",()=>tab(b.dataset.tab)));
 async function loadDue(){const r=await api("due",{days:7,limit:200});$("#due").innerHTML=r.entries&&r.entries.length?r.entries.map(e=>rowHTML(e)).join(""):`<p class="empty">7 天内没有要核对的记忆。</p>`}
 async function loadTags(){const r=await api("tags",{limit:300});const max=Math.max(1,...(r.tags||[]).map(t=>t.count));
   $("#tags").innerHTML=(r.tags||[]).map(t=>`<a href="#" data-tag="${esc(t.tag)}" class="tag ${t.count/max>0.5?"a":""}" style="font-size:${12+Math.round(6*Math.sqrt(t.count/max))}px">${esc(t.tag)} <span style="color:var(--muted)">${t.count}</span></a>`).join("")||`<p class="empty">还没有标签。</p>`}
+async function loadMind(){const[m,l]=await Promise.all([api("mind",{limit:16}),api("links",{days:7,limit:12})]);
+  const tr={new:"新",up:"↑",down:"↓",flat:""};
+  let h=`<p class="meta">最近最常被写进、被引用、被想起的话题，越近越重；带「探索」的是不在最前面、但这周升得最快的。</p>`;
+  h+=(m.tags||[]).length?`<table><tr><th>话题</th><th style="text-align:right">激活度</th><th>走势</th><th style="text-align:right">近 7 天 / 之前 4 周</th><th>最近的记忆</th></tr>${m.tags.map(t=>`<tr><td><a href="#" data-tag="${esc(t.tag)}">${esc(t.tag)}</a>${t.explore?' <span class="tag a">探索</span>':""}</td><td class="n">${t.activation.toFixed(2)}</td><td>${tr[t.trend]||""}</td><td class="n">${Math.round(t.uses_7d)} / ${Math.round(t.uses_prev_28d)}</td><td>${(t.recent||[]).map(b=>`<a href="#" data-go="${b.id}">#${b.id} ${esc(b.topic)}</a>`).join("<br>")}</td></tr>`).join("")}</table>`:`<p class="empty">还没有足够的使用记录。</p>`;
+  if((m.background||[]).length)h+=`<p class="meta">背景（太泛，不排）：${m.background.map(t=>esc(t.tag)).join("、")}</p>`;
+  h+=`<h3 style="margin:24px 0 8px">新冒出来的连接 <small style="color:var(--muted)">最近 7 天一起出现、以前从没一起出现过</small></h3>`;
+  h+=(l.links||[]).length?`<table><tr><th>两个话题</th><th style="text-align:right">一起出现</th><th style="text-align:right">PMI</th><th>哪几条</th></tr>${l.links.map(x=>`<tr><td><a href="#" data-tag="${esc(x.a)}">${esc(x.a)}</a> ⟷ <a href="#" data-tag="${esc(x.b)}">${esc(x.b)}</a></td><td class="n">${x.count}</td><td class="n">${x.pmi.toFixed(2)}</td><td>${(x.entries||[]).map(b=>`<a href="#" data-go="${b.id}">#${b.id} ${esc(b.topic)}</a>`).join("<br>")}</td></tr>`).join("")}</table>`:`<p class="empty">这周没有新冒出来的连接。</p>`;
+  $("#mind").innerHTML=h}
 async function loadStats(){const[s,m]=await Promise.all([api("stats"),api("metrics",{since_hours:72}).catch(()=>null)]);
   const card=(n,l)=>`<div class="card"><b>${n}</b><span>${l}</span></div>`;
   let h=`<div class="cards">${card(s.active,"有效记忆")}${card(s.superseded,"已被取代")}${card(s.tags,"标签")}${card(s.due,"该核对了")}${card(s.overdue_7d,"逾期 7 天以上")}${card((s.db_bytes/1048576).toFixed(1)+" MB","库文件")}</div>`;
@@ -146,7 +156,7 @@ async function loadStats(){const[s,m]=await Promise.all([api("stats"),api("metri
     h+=rows.length?`<table><tr><th>谁在用</th><th>命令</th><th style="text-align:right">次数</th><th style="text-align:right">p50 / p95 ms</th></tr>${rows.join("")}</table>`:`<p class="empty">近 72 小时没有使用记录。</p>`}
   $("#stats").innerHTML=h}
 search();
-{const id=+new URLSearchParams(location.search).get("id");if(id)show(id).catch(()=>{});}
+{const p=new URLSearchParams(location.search),id=+p.get("id"),q=p.get("q");if(q){$("#q").value=q;search()}if(id)show(id).catch(()=>{});if(p.get("tab"))tab(p.get("tab"));}
 </script>
 </body>
 </html>

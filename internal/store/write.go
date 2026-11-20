@@ -55,6 +55,8 @@ type AddInput struct {
 	// RecheckDays：自定这条多少天后到期核对（覆盖按易变程度的默认周期）。
 	// 例：一条「60 天内见分晓」的假设，填 60，到期就进待核对清单。
 	RecheckDays int `json:"recheck_days"`
+	// Cites：这条是拿哪几条旧记忆推出来的。被引用的记忆，它们的标签算「被想起」一次（心头的激活度 +3）。
+	Cites []int64 `json:"cites"`
 }
 
 // AddResult：Existed=true 表示内容已存在（幂等），返回原条目 id。
@@ -73,8 +75,8 @@ func (s *Store) retag(id int64, tags []string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var topic, body string
-	if err := tx.QueryRow(`SELECT topic, body FROM entries WHERE id=?`, id).Scan(&topic, &body); err != nil {
+	var kind, topic, body string
+	if err := tx.QueryRow(`SELECT kind, topic, body FROM entries WHERE id=?`, id).Scan(&kind, &topic, &body); err != nil {
 		return err
 	}
 	for _, q := range []string{`UPDATE entries SET tags=? WHERE id=?`} {
@@ -82,12 +84,13 @@ func (s *Store) retag(id int64, tags []string) error {
 			return err
 		}
 	}
-	for _, q := range []string{`DELETE FROM fts_bi WHERE rowid=?`, `DELETE FROM fts_tri WHERE rowid=?`, `DELETE FROM entry_tags WHERE eid=?`} {
+	for _, q := range []string{`DELETE FROM fts_bi WHERE rowid=?`, `DELETE FROM fts_tri WHERE rowid=?`, `DELETE FROM fts_imp WHERE rowid=?`,
+		`DELETE FROM entry_tags WHERE eid=?`} {
 		if _, err := tx.Exec(q, id); err != nil {
 			return err
 		}
 	}
-	if err := indexEntry(tx, id, topic, body, tags); err != nil {
+	if err := indexEntry(tx, id, kind, topic, body, tags); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -177,6 +180,16 @@ func (s *Store) Add(in AddInput) (*AddResult, error) {
 	if len(in.Meta) > 0 && json.Valid(in.Meta) {
 		meta = string(in.Meta)
 	}
+	if len(in.Cites) > 0 { // 引用关系也存进 meta，回头能追
+		var m map[string]any
+		if json.Unmarshal([]byte(meta), &m) != nil || m == nil {
+			m = map[string]any{}
+		}
+		m["cites"] = in.Cites
+		if b, err := json.Marshal(m); err == nil {
+			meta = string(b)
+		}
+	}
 	hash := ContentHash(kind, topic, body)
 	verified := !in.Unverified
 
@@ -237,7 +250,7 @@ func (s *Store) Add(in AddInput) (*AddResult, error) {
 		s.db.QueryRow(`SELECT id FROM entries WHERE content_hash=?`, hash).Scan(&id)
 		return &AddResult{ID: id, Existed: true, Volatility: vol}, nil
 	}
-	if err := indexEntry(tx, id, topic, body, tags); err != nil {
+	if err := indexEntry(tx, id, kind, topic, body, tags); err != nil {
 		return nil, err
 	}
 	res := &AddResult{ID: id, Volatility: vol}
@@ -253,6 +266,8 @@ func (s *Store) Add(in AddInput) (*AddResult, error) {
 	}
 	s.bump()
 	s.refreshMetas(append(res.Superseded, id)...)
+	s.useTags(tags, useWrite, t)
+	s.useEntries(in.Cites, useCite)
 	return res, nil
 }
 
@@ -263,10 +278,20 @@ func boolInt(b bool) int {
 	return 0
 }
 
-func indexEntry(tx *sql.Tx, id int64, topic, body string, tags []string) error {
+// ImportantKinds：这些类型的记忆另外进一张小索引 fts_imp。
+// 高频词命中几万条时，主索引只在最新的一段里按相关度排；旧的原则/决策/判断/教训从小索引里补，
+// 不用在几万条命中里逐条按类型筛（20 万条时这一步从 11 ms 降到亚毫秒）。
+var ImportantKinds = map[string]bool{"principle": true, "decision": true, "judgment": true, "lesson": true}
+
+func indexEntry(tx *sql.Tx, id int64, kind, topic, body string, tags []string) error {
 	bi, tri := indexText(topic, body, tags)
 	if _, err := tx.Exec(`INSERT INTO fts_bi(rowid,text) VALUES(?,?)`, id, bi); err != nil {
 		return err
+	}
+	if ImportantKinds[kind] {
+		if _, err := tx.Exec(`INSERT INTO fts_imp(rowid,text) VALUES(?,?)`, id, bi); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(`INSERT INTO fts_tri(rowid,text) VALUES(?,?)`, id, tri); err != nil {
 		return err
@@ -359,6 +384,7 @@ func (s *Store) Verify(id int64, by, note string) (*Entry, error) {
 		return nil, err
 	}
 	s.bump()
+	s.useEntries([]int64{id}, useVerify)
 	return s.Get(id)
 }
 

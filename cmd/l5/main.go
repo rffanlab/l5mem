@@ -32,7 +32,8 @@ const usage = `L5 记忆库 %s
   l5 serve [--db 路径] [--data 目录] [--socket 路径] [--http 127.0.0.1:19110] [--watch-at 10:17]
 
 写：
-  l5 add <主题> <正文> [-k 类型] [-t 标签1,标签2] [-s 出处] [--vol stable|slow|volatile] [--unverified] [--supersedes 旧id,..] [--meta JSON] [--recheck-days N]
+  l5 add <主题> <正文> [-k 类型] [-t 标签1,标签2] [-s 出处] [--vol stable|slow|volatile] [--unverified] [--supersedes 旧id,..] [--meta JSON] [--recheck-days N] [--cites 旧id,..]
+       --cites：这条是拿哪几条旧记忆推出来的（被引用的记忆算「被想起」，影响 l5 mind）
        类型：原则 principle / 决策 decision / 判断 judgment / 教训 lesson / 事实 fact（默认）/ 备忘 memo
   l5 supersede <旧id> <新id>          新值取代旧值（旧值不删，--history 能回看）
   l5 retract <id> [--reason 原因]      撤回一条错的（没有新值时用）
@@ -43,6 +44,8 @@ const usage = `L5 记忆库 %s
   l5 search <词…> [-n 8] [-k 类型] [--tag 标签] [--topic 主题前缀] [--since 7d|2026-11-01] [--until 日期] [--history] [--explain] [--no-fold]
   l5 get <id>      l5 history <id|主题>      l5 relate <id> [-n 8]
   l5 due [--days 0]       到期该核对的      l5 tags [-n 50]      l5 stats
+  l5 mind [-n 12]         心头在想什么：最近最常被写、被引用、被想起的标签（越近越重，大词单列）
+  l5 links [--days 7] [--min 2] [--prior 0] [-n 10]   新冒出来的连接：最近一起出现、以前没一起出现过的两个标签
 
 同义词（检索时一起查）：
   l5 alias add 英伟达 NVIDIA NVDA      l5 alias ls      l5 alias rm NVDA      l5 alias load deploy/aliases.txt
@@ -207,6 +210,7 @@ func runClient(args []string) error {
 		if d, err := strconv.Atoi(a.get("recheck-days", "0")); err == nil {
 			in.RecheckDays = d
 		}
+		in.Cites = ids(a.get("cites", ""))
 		body = in
 	case "search", "s":
 		op = "search"
@@ -337,6 +341,13 @@ func runClient(args []string) error {
 		q.Set("limit", a.get("limit", "100"))
 	case "tags":
 		q.Set("limit", a.get("limit", "50"))
+	case "mind":
+		q.Set("limit", a.get("limit", "12"))
+	case "links":
+		q.Set("days", a.get("days", "7"))
+		q.Set("min", a.get("min", "2"))
+		q.Set("prior", a.get("prior", "0"))
+		q.Set("limit", a.get("limit", "10"))
 	case "stats", "doctor":
 	case "consolidate", "repair", "reclassify", "watch":
 		body = map[string]any{}
@@ -522,6 +533,42 @@ func pretty(op string, raw json.RawMessage, d time.Duration) error {
 		json.Unmarshal(raw, &r)
 		for _, t := range r.Tags {
 			fmt.Printf("%6d  %s\n", t.Count, t.Tag)
+		}
+	case "mind":
+		var r store.MindResult
+		json.Unmarshal(raw, &r)
+		if len(r.Tags) == 0 {
+			fmt.Println("还没有足够的使用记录。")
+		}
+		arrow := map[string]string{"new": "新", "up": "↑", "flat": "·", "down": "↓"}
+		for _, t := range r.Tags {
+			ex := ""
+			if t.Explore {
+				ex = "  （探索：升得快）"
+			}
+			fmt.Printf("%6.2f %s  %s  近7天 %.0f / 之前4周 %.0f，%d 条%s\n", t.Activation, arrow[t.Trend], t.Tag, t.Uses7, t.UsesPrev, t.Docs, ex)
+			for _, b := range t.Recent {
+				fmt.Printf("         #%d %s\n", b.ID, b.Topic)
+			}
+		}
+		if len(r.Background) > 0 {
+			var bg []string
+			for _, t := range r.Background {
+				bg = append(bg, t.Tag)
+			}
+			fmt.Printf("背景（太泛，不排）：%s\n", strings.Join(bg, "、"))
+		}
+	case "links":
+		var r store.LinksResult
+		json.Unmarshal(raw, &r)
+		if len(r.Links) == 0 {
+			fmt.Printf("最近 %d 天没有新冒出来的连接。\n", r.Days)
+		}
+		for _, l := range r.Links {
+			fmt.Printf("%s ⟷ %s   一起出现 %d 次（以前 %d 次），PMI %.2f\n", l.A, l.B, l.Count, l.Prior, l.PMI)
+			for _, b := range l.Entries {
+				fmt.Printf("         #%d %s\n", b.ID, b.Topic)
+			}
 		}
 	default:
 		var v any

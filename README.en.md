@@ -80,6 +80,26 @@ l5 search compute --no-fold            # turn off near-duplicate folding
 When two hits share ≥ 60% of the character pairs in their first 300 characters, the lower-ranked one is moved to the end,
 so the limited slots go to different information. Nothing is dropped; it is still returned if there is room.
 
+### Top of mind, and newly formed links
+
+```bash
+l5 mind              # topics most recently written, cited and recalled (recent use weighs more; over-broad tags listed
+                     # separately as "background"; the last ~20% of slots go to the fastest-rising topics)
+l5 links             # pairs of topics that co-occurred in the last 7 days but never before (ranked by PMI, so hub tags don't win)
+l5 links --days 14 --prior 1
+l5 add "inference" "…" -k judgment --cites 12,15   # derived from #12 and #15: their topics count as recalled once
+```
+
+Activation follows ACT-R base-level learning: every use is a trace that decays with age,
+`A = ln Σ uses × (days + 1)^-0.5`, so three uses yesterday outweigh thirty half a year ago. Only real uses count: a write
+(2), being cited as the basis of an inference (3), being verified (2), appearing in the top 3 of an agent's search (1).
+Searches from the web UI and the patrol don't count, so recommendations can't feed themselves. Hub tags (on more than 8% of
+entries) and system tags (每日沉思, ic-event-123-style ids) are excluded; add more with `L5_MIND_STOP`.
+
+The daily patrol report includes the top of mind and new links. InfoCollector's daily reflection judges each new link as a
+coincidence, the same thing, or a new relationship; a new relationship becomes a conclusion that goes through self-check and
+is written back with `cites`.
+
 ## Integration
 
 ### CLI (local or remote)
@@ -104,6 +124,11 @@ for h in m.search("rental price", since="30d")["hits"]:
     print(h["id"], h["topic"], h["body"])
 m.add_aliases("英伟达", "NVIDIA", "NVDA")
 m.add("hypothesis/acme", "Acme will cut guidance next quarter", kind="judgment", unverified=True, recheck_days=60)
+m.add("inference/power", "…", kind="judgment", cites=[12, 15])
+for t in m.mind(limit=10)["tags"]:
+    print(t["tag"], t["trend"], t["explore"])
+for l in m.links(days=7):
+    print(l["a"], "⟷", l["b"], l["count"])
 ```
 
 ### HTTP API
@@ -113,8 +138,10 @@ m.add("hypothesis/acme", "Acme will cut guidance next quarter", kind="judgment",
 
 | op | parameters | notes |
 |---|---|---|
-| add | topic, body, kind, tags[], source, volatility, unverified, supersedes[], meta{}, created_at, recheck_days | content-hash dedup: a repeat returns `existed: true` |
+| add | topic, body, kind, tags[], source, volatility, unverified, supersedes[], meta{}, created_at, recheck_days, cites[] | content-hash dedup: a repeat returns `existed: true` |
 | search | q, limit, kind, tag, topic_prefix, since, until, history, explain, no_fold | four-route RRF + scoring; returns `expanded` (alias spellings searched) and `folded` |
+| mind | limit | top of mind: `tags` (activation, trend new/up/flat/down, uses in last 7 days / previous 4 weeks, explore, 3 recent entries), `background` (hub tags) |
+| links | days, min, prior, limit | new links: `links` (a, b, count, prior, pmi, score, entries) |
 | aliases | GET lists; POST `{"names": [...]}` creates / merges a group; POST `{"name": x}` removes one spelling | alias groups |
 | get / history / relate | id (history also accepts topic) | |
 | supersede / retract / verify / volatility | old,new / id,reason / id,note / id,volatility | |
@@ -122,7 +149,7 @@ m.add("hypothesis/acme", "Acme will cut guidance next quarter", kind="judgment",
 | consolidate / doctor / repair / reclassify / watch | | maintenance (watch = daily patrol; silent when nothing is found) |
 | export / import | – / JSONL body | lossless migration with fingerprint check and read-back self-test; alias groups included |
 
-Web UI at the server root (search, due list, tags, status; read-only). `?id=123` opens one entry.
+Web UI at the server root (search, due list, top of mind, tags, status; read-only). `?id=123` opens one entry, `?q=term` searches, `?tab=mind` opens top of mind.
 
 ## How ranking works
 
@@ -136,6 +163,8 @@ Web UI at the server root (search, due list, tags, status; read-only). `?id=123`
 What keeps it at a few milliseconds at 50k entries: bm25 is computed only for the part worth ranking; the bigram index uses
 `detail=full`; lightweight candidate metadata lives in memory; the read path never writes (hit counts are buffered and flushed
 periodically); results are LRU-cached and any write invalidates the cache. Measurements in [BENCH.md](BENCH.md).
+
+Scaling design (what happens as the store grows) is in [docs/SCALING.md](docs/SCALING.md) (Chinese).
 
 ## Maintenance
 
@@ -176,6 +205,7 @@ On Windows, run `deploy\deploy-158.bat`: it packs `bin/l5` and `deploy/`, upload
 | L5_W_LEX / L5_W_PROX / L5_W_REC / L5_W_IMP | 0.45 / 0.15 / 0.25 / 0.15 | ranking weights |
 | L5_HALF_LIFE_DAYS | 30 | recency half-life |
 | L5_STABLE_FLAT | 1 | stable memories do not decay with age; 0 = uniform decay |
+| L5_MIND_STOP | empty | extra tags (comma-separated) excluded from mind and links, on top of the built-in system tags |
 | L5_TAG_BOOST | 0.10 | bonus when the query is exactly a tag name; set 0 if the usage report flags sloppy tagging |
 | client: L5_URL / L5_TOKEN / L5_CALLER | | remote address, write token, caller name |
 

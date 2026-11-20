@@ -78,6 +78,7 @@ type Store struct {
 	aliasMu     sync.RWMutex
 	aliasOf     map[string]string
 	aliasGroups map[string][]string
+	mind        *mindState // 标签激活度、共现（心头 / 新连接）
 }
 
 func Open(path string, usageDir string) (*Store, error) {
@@ -105,6 +106,10 @@ func Open(path string, usageDir string) (*Store, error) {
 		return nil, err
 	}
 	if err := s.loadAliases(); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := s.initMind(); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -147,7 +152,7 @@ CREATE TABLE IF NOT EXISTS entries(
   content_hash TEXT NOT NULL UNIQUE,
   meta TEXT NOT NULL DEFAULT '{}'
 );
-CREATE INDEX IF NOT EXISTS ix_entries_topic ON entries(topic COLLATE BINARY);
+CREATE INDEX IF NOT EXISTS ix_entries_topic_ce ON entries(topic COLLATE BINARY, created_epoch);
 CREATE INDEX IF NOT EXISTS ix_entries_active ON entries(superseded_by, valid_to);
 CREATE INDEX IF NOT EXISTS ix_entries_recheck ON entries(recheck_epoch) WHERE recheck_epoch IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_entries_created ON entries(created_epoch);
@@ -165,6 +170,20 @@ func (s *Store) migrate() error {
 	}
 	if _, err := s.db.Exec(aliasSchema); err != nil {
 		return fmt.Errorf("建同义词表失败：%w", err)
+	}
+	// 主题索引带上时间（覆盖索引：主题前缀检索不用回表）；老的单列索引删掉
+	s.db.Exec(`DROP INDEX IF EXISTS ix_entries_topic`)
+	// 重要类型的小索引（v2 新增）：老库第一次打开时从主索引补齐
+	var has int
+	s.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name='fts_imp'`).Scan(&has)
+	if has == 0 {
+		if _, err := s.db.Exec(`CREATE VIRTUAL TABLE fts_imp USING fts5(text, tokenize='unicode61 remove_diacritics 2')`); err != nil {
+			return fmt.Errorf("建重要类型索引失败：%w", err)
+		}
+		if _, err := s.db.Exec(`INSERT INTO fts_imp(rowid, text) SELECT b.rowid, b.text FROM fts_bi b JOIN entries e ON e.id = b.rowid
+			WHERE e.kind IN ('principle','decision','judgment','lesson')`); err != nil {
+			return fmt.Errorf("补齐重要类型索引失败：%w", err)
+		}
 	}
 	_, err := s.db.Exec(`INSERT INTO kv(k,v) VALUES('schema_version',?) ON CONFLICT(k) DO NOTHING`, strconv.Itoa(SchemaVersion))
 	return err
@@ -212,7 +231,18 @@ func scanMeta(sc interface{ Scan(...any) error }) (*candMeta, error) {
 	var notSup int
 	err := sc.Scan(&m.id, &m.kind, &m.topic, &m.created, &m.volatility, &m.useCount, &notSup, &m.validTo)
 	m.notSuperseded = notSup == 1
+	m.kind, m.volatility = intern(m.kind), intern(m.volatility) // 只有几种取值：共用一份字符串，百万条时省几十 MB
 	return m, err
+}
+
+var internTab sync.Map
+
+func intern(s string) string {
+	if v, ok := internTab.Load(s); ok {
+		return v.(string)
+	}
+	internTab.Store(s, s)
+	return s
 }
 
 func (s *Store) loadMetas() error {
@@ -221,7 +251,9 @@ func (s *Store) loadMetas() error {
 		return err
 	}
 	defer rows.Close()
-	all := map[int64]*candMeta{}
+	var n int
+	s.db.QueryRow(`SELECT count(*) FROM entries`).Scan(&n)
+	all := make(map[int64]*candMeta, n) // 预分配：百万条时省掉反复扩容
 	for rows.Next() {
 		m, err := scanMeta(rows)
 		if err != nil {

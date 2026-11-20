@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -132,6 +133,7 @@ func (s *Store) Search(o SearchOpts) (*SearchResult, error) {
 			r.Cached = true
 			r.Ms = float64(time.Since(t0).Microseconds()) / 1000
 			s.countHits(r.Hits)
+			s.noteSearch(o.Caller, r.Hits)
 			return &r, nil
 		}
 	}
@@ -144,6 +146,7 @@ func (s *Store) Search(o SearchOpts) (*SearchResult, error) {
 		s.cache.put(key, res)
 	}
 	s.countHits(res.Hits)
+	s.noteSearch(o.Caller, res.Hits)
 	cp := *res
 	return &cp, nil
 }
@@ -173,6 +176,21 @@ func (s *Store) search(o SearchOpts) (*SearchResult, error) {
 		routes["recent"] = s.ids(`SELECT id FROM entries WHERE created_epoch >= ? AND created_epoch < ? ORDER BY created_epoch DESC LIMIT ?`,
 			o.Since, until, routeLimit*3)
 	} else {
+		// 各路并行跑（WAL 下读不互相阻塞）；延迟 ≈ 最慢的一路，而不是几路之和
+		var wg sync.WaitGroup
+		var mu sync.Mutex
+		t0 := time.Now()
+		put := func(name string, list []int64) {
+			if traceSearch {
+				fmt.Printf("    route %-8s %v n=%d\n", name, time.Since(t0), len(list))
+			}
+			if len(list) > 0 {
+				mu.Lock()
+				routes[name] = list
+				mu.Unlock()
+			}
+		}
+		goRoute := func(f func()) { wg.Add(1); go func() { defer wg.Done(); f() }() }
 		// 每个词的所有写法（同义词组）：词内 OR，词与词之间 AND
 		variants := make([][]string, len(pq.Terms))
 		for i, t := range pq.Terms {
@@ -181,64 +199,94 @@ func (s *Store) search(o SearchOpts) (*SearchResult, error) {
 				res.Expanded = append(res.Expanded, v)
 			}
 		}
-		// 1) 二元组：中文按重叠二元组 AND，西文词前缀
-		{
-			var groups []string
-			for _, vs := range variants {
-				var ex []string
-				seen := map[string]bool{}
-				for k, v := range vs {
-					// 用户自己敲的词：西文按前缀匹配；同义扩展出来的写法：整词匹配（免得 Arm 带出 army）
-					if e := termExpr(v, k == 0); e != "" && !seen[e] {
-						seen[e] = true
-						ex = append(ex, e)
-					}
-				}
-				if len(ex) == 1 {
-					groups = append(groups, ex[0])
-				} else if len(ex) > 1 {
-					groups = append(groups, "("+strings.Join(ex, " OR ")+")")
+		// 1) 二元组表达式：中文按重叠二元组 AND，西文词前缀
+		var groups []string
+		for _, vs := range variants {
+			var ex []string
+			seen := map[string]bool{}
+			for k, v := range vs {
+				// 用户自己敲的词：西文按前缀匹配；同义扩展出来的写法：整词匹配（免得 Arm 带出 army）
+				if e := termExpr(v, k == 0); e != "" && !seen[e] {
+					seen[e] = true
+					ex = append(ex, e)
 				}
 			}
-			if len(groups) > 0 {
-				routes["bigram"] = s.ftsRoute("fts_bi", strings.Join(groups, " AND "))
+			if len(ex) == 1 {
+				groups = append(groups, ex[0])
+			} else if len(ex) > 1 {
+				groups = append(groups, "("+strings.Join(ex, " OR ")+")")
 			}
 		}
-		// 2) 三元组：≥3 字的词做子串精确匹配（同义写法都 ≥3 字才扩展，否则这个词交给二元组）
-		{
-			var tp []string
-			for i, t := range pq.Terms {
-				if utf8.RuneCountInString(t) < 3 {
-					continue
-				}
-				ok, ex := true, []string{}
-				for _, v := range variants[i] {
-					lv := strings.ToLower(strings.TrimSpace(v))
-					if utf8.RuneCountInString(lv) < 3 {
-						ok = false
-						break
-					}
-					ex = append(ex, ftsQuote(lv))
-				}
-				if !ok {
-					ex = []string{ftsQuote(t)}
-				}
-				if len(ex) == 1 {
-					tp = append(tp, ex[0])
-				} else {
-					tp = append(tp, "("+strings.Join(ex, " OR ")+")")
-				}
+		biMatch := strings.Join(groups, " AND ")
+		// 2) 三元组表达式：≥3 字的词做子串精确匹配（同义写法都 ≥3 字才扩展，否则这个词交给二元组）
+		var tp []string
+		triCover := len(pq.Terms) > 0 // 每个词（含同义写法）都 ≥3 字：三元组一路就够了
+		for i, t := range pq.Terms {
+			if utf8.RuneCountInString(t) < 3 {
+				triCover = false
+				continue
 			}
-			if len(tp) > 0 {
-				routes["trigram"] = s.ftsRoute("fts_tri", strings.Join(tp, " AND "))
+			ok, ex := true, []string{}
+			for _, v := range variants[i] {
+				lv := strings.ToLower(strings.TrimSpace(v))
+				if utf8.RuneCountInString(lv) < 3 {
+					ok = false
+					break
+				}
+				ex = append(ex, ftsQuote(lv))
+			}
+			if !ok {
+				ex = []string{ftsQuote(t)}
+				triCover = false
+			}
+			if len(ex) == 1 {
+				tp = append(tp, ex[0])
+			} else {
+				tp = append(tp, "("+strings.Join(ex, " OR ")+")")
+			}
+		}
+		triMatch := strings.Join(tp, " AND ")
+		// 窗口之外的原则/决策/判断/教训从小索引补上（不该因为旧就漏掉）
+		withImportant := func(list []int64, floor int64) []int64 {
+			if floor <= 0 || biMatch == "" {
+				return list
+			}
+			seen := make(map[int64]bool, len(list))
+			for _, id := range list {
+				seen[id] = true
+			}
+			return appendUnique(list, seen, s.ids(`SELECT rowid FROM fts_imp WHERE fts_imp MATCH ? AND rowid < ?
+				ORDER BY rowid DESC LIMIT 100`, biMatch, floor))
+		}
+		bigram := func() {
+			if biMatch != "" {
+				list, floor := s.ftsRoute("fts_bi", biMatch)
+				put("bigram", withImportant(list, floor))
+			}
+		}
+		if triCover && triMatch != "" {
+			// 词都够长：三元组（原文连续出现）一路就能找全，不再在二元组上做多词求交（20 万条时省 10 ms 左右）；
+			// 三元组一条都没找到（词在原文里被拆开了）再退回二元组
+			goRoute(func() {
+				list, floor := s.ftsRoute("fts_tri", triMatch)
+				if len(list) == 0 {
+					bigram()
+					return
+				}
+				put("trigram", withImportant(list, floor))
+			})
+		} else {
+			goRoute(bigram)
+			if triMatch != "" {
+				goRoute(func() { list, _ := s.ftsRoute("fts_tri", triMatch); put("trigram", list) })
 			}
 		}
 		allKeys := []string{pq.Raw}
 		for _, vs := range variants {
 			allKeys = append(allKeys, vs...)
 		}
-		// 3) 主题范围查（BINARY 范围，中文前缀也走索引）
-		{
+		// 3) 主题范围查（BINARY 范围，中文前缀也走索引）。前缀太泛时只看按主题排的前 1000 条再按时间排，不全表排序
+		goRoute(func() {
 			seen := map[int64]bool{}
 			var list []int64
 			done := map[string]bool{}
@@ -247,15 +295,13 @@ func (s *Store) search(o SearchOpts) (*SearchResult, error) {
 					continue
 				}
 				done[k] = true
-				list = appendUnique(list, seen, s.ids(`SELECT id FROM entries WHERE topic >= ? AND topic < ? ORDER BY created_epoch DESC LIMIT 100`,
-					k, k+"\U0010ffff"))
+				list = appendUnique(list, seen, s.ids(`SELECT id FROM (SELECT id, created_epoch FROM entries WHERE topic >= ? AND topic < ?
+					ORDER BY topic LIMIT 1000) ORDER BY created_epoch DESC LIMIT 100`, k, k+"\U0010ffff"))
 			}
-			if len(list) > 0 {
-				routes["topic"] = list
-			}
-		}
+			put("topic", list)
+		})
 		// 4) 标签点查：查询词 = 标签名 → 直接顶到第一梯队；太泛的枢纽标签放弃（交给全文）
-		{
+		goRoute(func() {
 			cap := s.tagCap(o.Limit)
 			seen := map[int64]bool{}
 			tried := map[string]bool{}
@@ -273,17 +319,21 @@ func (s *Store) search(o SearchOpts) (*SearchResult, error) {
 					continue
 				}
 				if df > cap {
+					mu.Lock()
 					res.HubTags = append(res.HubTags, k)
+					mu.Unlock()
 					continue
 				}
 				list = appendUnique(list, seen, s.ids(`SELECT t.eid FROM entry_tags t JOIN entries e ON e.id=t.eid WHERE t.tag=?
 					ORDER BY e.created_epoch DESC`, k))
 			}
 			if len(list) > 0 {
-				routes["tag"] = list
+				put("tag", list)
+				mu.Lock()
 				res.TagCands = len(list)
+				mu.Unlock()
 			}
-		}
+		})
 		// 5) 单个汉字：没有二元组可用，走有界 LIKE（只扫最近 2 万条）
 		if len(pq.Singles) > 0 && len(pq.Bigrams) == 0 && len(pq.Words) == 0 {
 			var maxID int64
@@ -296,9 +346,10 @@ func (s *Store) search(o SearchOpts) (*SearchResult, error) {
 				args = append(args, p, p, p)
 			}
 			args = append(args, routeLimit)
-			routes["like"] = s.ids(`SELECT id FROM entries WHERE id > ? AND `+strings.Join(cond, " AND ")+
-				` ORDER BY created_epoch DESC LIMIT ?`, args...)
+			put("like", s.ids(`SELECT id FROM entries WHERE id > ? AND `+strings.Join(cond, " AND ")+
+				` ORDER BY created_epoch DESC LIMIT ?`, args...))
 		}
+		wg.Wait()
 	}
 
 	mark("routes")
@@ -463,30 +514,24 @@ func (s *Store) search(o SearchOpts) (*SearchResult, error) {
 }
 
 // bm25 要给每个命中打分（每条都要查一次文档长度），高频词命中几千条时这是检索的大头。
-// 命中少：全部按 bm25 排；命中多：高频词本身区分度就低，只在最新的 bm25Window 条里按 bm25 排，
-// 再补上「原则/决策/判断/教训」这些不该因为旧就被漏掉的条目。
+// 命中少：全部按 bm25 排；命中多：高频词本身区分度就低，只在最新的 bm25Window 条里按 bm25 排。
+// 返回 (名单, 窗口下沿 rowid；0 = 没开窗口)。「原则/决策/判断/教训」由调用方从 fts_imp 小索引补上窗口之外的。
 const bm25Full = 1500
 const bm25Window = 600
 
-func (s *Store) ftsRoute(table, match string) []int64 {
+func (s *Store) ftsRoute(table, match string) ([]int64, int64) {
 	var n int
 	s.db.QueryRow(`SELECT count(*) FROM (SELECT 1 FROM `+table+` WHERE `+table+` MATCH ? LIMIT ?)`, match, bm25Full+1).Scan(&n)
 	if n == 0 {
-		return nil
+		return nil, 0
 	}
 	if n <= bm25Full {
-		return s.ids(`SELECT rowid FROM `+table+` WHERE `+table+` MATCH ? ORDER BY bm25(`+table+`) LIMIT ?`, match, routeLimit)
+		return s.ids(`SELECT rowid FROM `+table+` WHERE `+table+` MATCH ? ORDER BY bm25(`+table+`) LIMIT ?`, match, routeLimit), 0
 	}
 	var floor int64
 	s.db.QueryRow(`SELECT rowid FROM `+table+` WHERE `+table+` MATCH ? ORDER BY rowid DESC LIMIT 1 OFFSET ?`, match, bm25Window-1).Scan(&floor)
-	list := s.ids(`SELECT rowid FROM `+table+` WHERE `+table+` MATCH ? AND rowid >= ? ORDER BY bm25(`+table+`) LIMIT ?`,
-		match, floor, routeLimit)
-	seen := make(map[int64]bool, len(list))
-	for _, id := range list {
-		seen[id] = true
-	}
-	return appendUnique(list, seen, s.ids(`SELECT id FROM entries WHERE kind IN ('principle','decision','judgment','lesson')
-		AND id < ? AND id IN (SELECT rowid FROM `+table+` WHERE `+table+` MATCH ?) ORDER BY created_epoch DESC LIMIT 100`, floor, match))
+	return s.ids(`SELECT rowid FROM `+table+` WHERE `+table+` MATCH ? AND rowid >= ? ORDER BY bm25(`+table+`) LIMIT ?`,
+		match, floor, routeLimit), floor
 }
 
 func round3(f float64) float64 { return float64(int64(f*1000+0.5)) / 1000 }
@@ -579,6 +624,7 @@ func (s *Store) pendingHits() map[int64]int {
 
 // FlushHits 把内存里的访问次数批量写回库；返回写回的条数。
 func (s *Store) FlushHits() int {
+	s.flushMind()
 	s.hitsMu.Lock()
 	h := s.hits
 	s.hits = map[int64]int{}

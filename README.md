@@ -72,6 +72,23 @@ l5 search 算力 --no-fold               # 关掉近似重复折叠
 **近似重复折叠**：同一件事的几个版本、批量补录的同类事实，前 300 字的字对重合度 ≥ 60% 时，排在后面的挪到最后，
 有限的名额留给不同的信息（只挪不删，名额够就还在）。
 
+### 心头在想什么、新冒出来的连接
+
+```bash
+l5 mind              # 最近最常被写进、被引用、被想起的话题（越近越重；大词单列「背景」；末尾两成名额留给升得最快的）
+l5 links             # 最近 7 天一起出现、以前从没一起出现过的两个话题（按「比偶然多了多少」排，大词排不上来）
+l5 links --days 14 --prior 1    # 放宽：14 天内，以前最多一起出现过 1 次
+l5 add "推论" "……" -k judgment --cites 12,15   # 这条是拿 #12、#15 推出来的：它们的话题算「被想起」一次
+```
+
+一个话题「在心头」的程度按 ACT-R 的基础激活算：每被用一次记一笔，按距今天数衰减，`A = ln Σ 次数 × (天数+1)^-0.5`，
+昨天用 3 次比半年前用 30 次更在心头。只算真实发生的使用：写入（2 分）、被引用为推理依据（3 分）、被核对（2 分）、
+出现在机器人检索结果的前 3 条（1 分）。网页浏览、巡检的检索不算，免得「越推荐越常被看、越常被看越推荐」。
+太泛的大词（超过 8% 的记忆都挂着）和系统标签（每日沉思、ic-event-123 这类编号）不参与排名，系统标签可以用 `L5_MIND_STOP` 追加。
+
+每日巡检报告里也附上心头前几个和新连接。InfoCollector 的每日沉思会拿新连接逐对判断是巧合、同一件事还是新关系，
+新关系当成一条结论走自检、写回（写回时用 `cites` 标明依据）。
+
 ## 接入
 
 ### 命令行（本机或远程）
@@ -96,6 +113,11 @@ for h in m.search("租赁价格", since="30d")["hits"]:
     print(h["id"], h["topic"], h["body"])
 m.add_aliases("英伟达", "NVIDIA", "NVDA")
 m.add("假设/某公司", "某公司下季度会下调指引", kind="judgment", unverified=True, recheck_days=60)
+m.add("推论/电费", "……", kind="judgment", cites=[12, 15])   # 标明依据
+for t in m.mind(limit=10)["tags"]:
+    print(t["tag"], t["trend"], t["explore"])
+for l in m.links(days=7):
+    print(l["a"], "⟷", l["b"], l["count"])
 ```
 
 ### HTTP 接口
@@ -105,8 +127,10 @@ m.add("假设/某公司", "某公司下季度会下调指引", kind="judgment", 
 
 | 操作 | 参数 | 说明 |
 |---|---|---|
-| add | topic, body, kind, tags[], source, volatility, unverified, supersedes[], meta{}, created_at, recheck_days | 内容哈希去重：重复写返回 `existed: true` |
+| add | topic, body, kind, tags[], source, volatility, unverified, supersedes[], meta{}, created_at, recheck_days, cites[] | 内容哈希去重：重复写返回 `existed: true` |
 | search | q, limit, kind, tag, topic_prefix, since, until, history, explain, no_fold | 四路 RRF + 打分；返回 `expanded`（同义扩展）、`folded`（折叠条数） |
+| mind | limit | 心头：`tags`（activation、trend new/up/flat/down、近 7 天 / 之前 4 周使用量、explore、最近 3 条）、`background`（大词） |
+| links | days, min, prior, limit | 新连接：`links`（a、b、count、prior、pmi、score、entries） |
 | aliases | GET 列出；POST `{"names": [...]}` 建组 / 合并；POST `{"name": x}` 移出 | 同义词组 |
 | get / history / relate | id（history 也可 topic） | |
 | supersede / retract / verify / volatility | old,new / id,reason / id,note / id,volatility | |
@@ -114,7 +138,7 @@ m.add("假设/某公司", "某公司下季度会下调指引", kind="judgment", 
 | consolidate / doctor / repair / reclassify / watch | | 维护（watch = 每日巡检，没发现就 silent） |
 | export / import | - / JSONL 正文 | 无损迁移：指纹 + 回读自检；同义词组一起导出导入 |
 
-网页：服务地址根路径（检索、待核对、标签、运行状态；只读），`?id=123` 直接打开某条。
+网页：服务地址根路径（检索、待核对、心头、标签、运行状态；只读），`?id=123` 直接打开某条，`?q=词` 直接检索，`?tab=mind` 直接看心头。
 
 ## 检索是怎么排的
 
@@ -127,6 +151,8 @@ m.add("假设/某公司", "某公司下季度会下调指引", kind="judgment", 
 几个让它在 5 万条时仍然只要几毫秒的做法：bm25 只给值得排的那部分算；二元组索引用 `detail=full`；
 候选的轻量元数据常驻内存；读路径不写库（访问计数在内存里攒着，定时回写）；检索结果 LRU 缓存，任何写入都会让缓存失效。
 细节和实测见 [BENCH.md](BENCH.md)。
+
+扩容设计（数据量大了以后怎么办）见 [docs/SCALING.md](docs/SCALING.md)。
 
 ## 维护
 
@@ -165,6 +191,7 @@ Windows 上运行 `deploy\deploy-158.bat`，会打包 `bin/l5` 和 `deploy/`、�
 | L5_W_LEX / L5_W_PROX / L5_W_REC / L5_W_IMP | 0.45 / 0.15 / 0.25 / 0.15 | 排序权重 |
 | L5_HALF_LIFE_DAYS | 30 | 新鲜度半衰期 |
 | L5_STABLE_FLAT | 1 | 长期记忆不随时间衰减；设 0 恢复统一衰减 |
+| L5_MIND_STOP | 空 | 不参与心头和新连接的标签（逗号分隔，追加到默认的系统标签之后） |
 | L5_TAG_BOOST | 0.10 | 查询词正好是标签名时的额外加分；使用日报判定「乱打标签」时设 0 |
 | 客户端：L5_URL / L5_TOKEN / L5_CALLER | | 远程地址、写入令牌、调用方名字 |
 
